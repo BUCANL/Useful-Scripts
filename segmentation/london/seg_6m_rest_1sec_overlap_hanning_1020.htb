@@ -1,0 +1,99 @@
+%diary 'seg_6m_rest_1sec_overlap_hanning_1020.log'
+
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+EEG.subject = EEG.filename(6:8);
+EEG.session = str2num(EEG.filename(15:16));
+
+participants = tdfread('london_participants.tsv','\t');
+p_ind = find(participants.participant_id==str2num(EEG.subject));
+
+EEG.condition = num2str(participants.gender(p_ind));
+
+if strcmp(EEG.filename(6),'6');
+    if participants.outcome(p_ind)==3;
+        EEG.group = 'asd';
+    else;
+        EEG.group = 'at-risk';
+    end;
+else;
+    EEG.group = 'control';
+end;
+
+start_inds = find(strcmpi('Rst0',{EEG.event.type}));
+end_inds = find(strcmpi('Rst1',{EEG.event.type}));
+
+if isempty(start_inds) || isempty(end_inds);
+    disp('SKIPPING [batch_dfn]: no Rst0 or Rst1 markers in dataset.');
+    return;
+end;
+if length(start_inds)~=length(end_inds);
+    disp('SKIPPING [batch_dfn]: different number of Rst0 and Rst1 markers.');
+    return;
+end;
+
+EEG = pop_marks_event_gap(EEG,{'Rst0','Rst1'},[],'rest',[0  1  0],'exact','on','ref_point','both','interval','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'rest'},'remove','off');
+
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+
+EEG = warp_locs(EEG,'derivatives/lossless/code/misc/standard_1020_bucanl19.elc', ...
+                    'transform',[0,0,0,0,0,-1.57,1,1,1],'manual','off');
+EEG = interp_mont( EEG,'derivatives/lossless/code/misc/standard_1020_bucanl19.elc','manual','off');
+
+EEG = marks_continuous2epochs(EEG,'recurrence',0.5,'limits',[-0.5 0.5],'keepboundary','on','eventtype','rest');
+
+%purge unnecessary fields...
+for i=1:length(EEG.marks.time_info);
+    EEG.marks.time_info(i).flags=[];
+end
+EEG.data_sd_ep=[];
+EEG.c_data_sd_ep=[];
+EEG.data_sd_ch=[];
+EEG.c_data_sd_ch=[];
+EEG.m_neigbr_r_ch=[];
+EEG.c_neigbr_r_ch=[];
+EEG.m_neigbr_r_lat=[];
+EEG.c_neigbr_r_lat=[];
+EEG.amica=[];
+EEG.icaact_sd1_lat=[];
+EEG.c_icaact1_sd_lat=[];
+EEG.icaact_sd2_lat=[];
+EEG.c_icaact_sd2_lat=[];
+EEG.icaact_ta_lat=[];
+EEG.c_icaact_ta_lat=[];
+EEG.icaact_b_lat=[];
+EEG.c_icaact_b_lat=[];
+EEG.icaact = [];
+EEG.icawinv = [];
+EEG.icasphere = [];
+EEG.icaweights = [];
+EEG.icachansind = [];
+
+% resting task segmentation
+if EEG.trials>1;
+    h=hanning(EEG.pnts);
+    hr=repmat(h,1,EEG.trials);
+
+    for i=1:size(EEG.data,1);
+        d=squeeze(EEG.data(i,:,:));
+        EEG.data(i,:,:)=d.*hr;
+    end
+    if isempty(EEG.event);
+        EEG.event = struct('type','','latency',NaN,'urevent',[],'duration',0,'epoch',0);
+    end
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_rest_seg.set');
+else;
+    disp('SKIPPING [batch_dfn]: No resting trials remaining.');
+end;
+

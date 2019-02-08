@@ -1,0 +1,173 @@
+%% this is a template segmentation script for ERP task data
+
+% keep a log file of entire batch (may comment this out)
+diary 'derivatives/lossless/diary/seg_task.log'
+
+logging_log('NOTICE', 'Starting seg script');
+
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+% add STUDY variables
+EEG.subject = EEG.filename(6:8);
+
+participants = tdfread('london_participants.tsv','\t');
+p_ind = find(participants.participant_id==str2num(EEG.subject));
+
+if strcmp(EEG.filename(6),'6');
+    if participants.outcome(p_ind)==3;
+        EEG.group = 'asd';
+    else;
+        EEG.group = 'at-risk';
+    end;
+else;
+    EEG.group = 'control';
+end;
+
+% Removed flagged channels and time segments
+sprintf('%s','Purging flagged channels...\n');
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+logging_log('INFO', 'TIME TO: PURGE DATA...');
+
+%purge unnecessary fields...
+for i=1:length(EEG.marks.time_info);
+    EEG.marks.time_info(i).flags=[];
+end
+EEG.data_sd_ep=[];
+EEG.c_data_sd_ep=[];
+EEG.data_sd_ch=[];
+EEG.c_data_sd_ch=[];
+EEG.m_neigbr_r_ch=[];
+EEG.c_neigbr_r_ch=[];
+EEG.m_neigbr_r_lat=[];
+EEG.c_neigbr_r_lat=[];
+EEG.amica=[];
+EEG.icaact_sd1_lat=[];
+EEG.c_icaact1_sd_lat=[];
+EEG.icaact_sd2_lat=[];
+EEG.c_icaact_sd2_lat=[];
+EEG.icaact_ta_lat=[];
+EEG.c_icaact_ta_lat=[];
+EEG.icaact_b_lat=[];
+EEG.c_icaact_b_lat=[];
+EEG.icaact = [];
+EEG.icawinv = [];
+EEG.icasphere = [];
+EEG.icaweights = [];
+EEG.icachansind = [];
+
+EEG = warp_locs(EEG,'derivatives/lossless/code/misc/GSN-HydroCel-129_EEGLAB.sfp','transform', ...
+                [1.494,0.006093,0.6833,-0.0007808,-0.0234,-0.0006312,0.08927,0.08774,0.08076],'manual','off');
+EEG = interp_mont( EEG,'derivatives/lossless/code/misc/GSN-HydroCel-129_EEGLAB.sfp','nfids',3,'manual','off');
+
+% filter the data 1Hz highpass, 30Hz lowpass
+EEG = pop_eegfiltnew(EEG,[], 1,[],1,[],0);
+EEG = pop_eegfiltnew(EEG,[],30,[],0,[],0);
+
+% add face offset events
+for i=1:length(EEG.event)-1;
+    if strncmp(EEG.event(i).type,'dyn',3);
+        if EEG.event(i+2).latency>EEG.event(i).latency+EEG.srate+100;
+            EEG.event(length(EEG.event)+1).type='dynO';
+            EEG.event(length(EEG.event)).latency=EEG.event(i).latency+800/(1000/EEG.srate);
+        end
+    end
+end
+        
+% add noise offset events
+for i=1:length(EEG.event)-1;
+    if strncmp(EEG.event(i).type,'Noi',3);
+        if EEG.event(i+1).latency>EEG.event(i).latency+EEG.srate+100;
+            EEG.event(length(EEG.event)+1).type='noisO';
+            EEG.event(length(EEG.event)).latency=EEG.event(i).latency+800/(1000/EEG.srate);
+        end
+    end
+end
+
+tmpEEG=EEG;
+
+% static direct face
+try;
+    EEG = pop_epoch( tmpEEG, { 'sta1' }, ...
+                    [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    EEG.condition = 'static_direct';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_dir_seg.set');
+catch;
+    disp(['SKIPPING static direct condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% static indirect face
+try;
+    EEG = pop_epoch( tmpEEG, { 'sta2' 'sta3' }, ...
+                    [-3 6], 'newname', 'indirect', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    EEG.condition = 'static_indirect';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_ind_seg.set');
+catch;
+    disp(['SKIPPING static indirect condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% dynamic direct face
+try;
+    EEG = pop_epoch( tmpEEG, { 'dyn1' }, ...
+                    [-3 6], 'newname', 'dyndirect', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    EEG.condition = 'dynamic_direct';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_dyndir_seg.set');
+catch;
+    disp(['SKIPPING dynamic direct condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% dynamic indirect face
+try;
+    EEG = pop_epoch( tmpEEG, { 'dyn2' 'dyn3' }, ...
+                    [-3 6], 'newname', 'dynindirect', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    EEG.condition = 'dynamic_indirect';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_dynind_seg.set');
+catch;
+    disp(['SKIPPING dynamic indirect condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% noise face
+try;
+    EEG = pop_epoch( tmpEEG, { 'Nois' }, ...
+                    [-3 6], 'newname', 'noise_face', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    EEG.condition = 'noise';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_nois_seg.set');
+catch;
+    disp(['SKIPPING noise face condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% noise face offset
+try;
+    EEG = pop_epoch( tmpEEG, { 'noisO' }, ...
+                    [-3 6], 'newname', 'nois_offset', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    EEG.condition = 'noise_offset';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_noisO_seg.set');
+catch;
+    disp(['SKIPPING noise offset condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% dynamic face offset
+try;
+    EEG = pop_epoch( tmpEEG, { 'dynO' }, ...
+                    [-3 6], 'newname', 'dyn_offset', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    EEG.condition = 'dynamic_offset';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_dynO_seg.set');
+catch;
+    disp(['SKIPPING face offset condition for ' EEG.filename ': No segments remaining.']);
+end;

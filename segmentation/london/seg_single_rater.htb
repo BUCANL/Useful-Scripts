@@ -1,0 +1,140 @@
+
+
+logging_log('NOTICE', 'Starting seg script');
+
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+EEG.subject = EEG.filename(6:8);
+
+if strcmp(EEG.subject(1),'7');
+    EEG.group = 'control'; % control
+else
+    EEG.group = 'at-risk'; % at-risk
+end;
+
+if strcmp(EEG.filename(end-5),'_');
+    EEG.session = 1; % replicated
+else
+    EEG.session = 0; % original
+end;
+
+% Removed flagged channels and time segments
+sprintf('%s','Purging flagged channels...\n');
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+logging_log('INFO', 'TIME TO: PURGE DATA...');
+
+%purge unnecessary fields...
+for i=1:length(EEG.marks.time_info);
+    EEG.marks.time_info(i).flags=[];
+end
+EEG.data_sd_ep=[];
+EEG.c_data_sd_ep=[];
+EEG.data_sd_ch=[];
+EEG.c_data_sd_ch=[];
+EEG.m_neigbr_r_ch=[];
+EEG.c_neigbr_r_ch=[];
+EEG.m_neigbr_r_lat=[];
+EEG.c_neigbr_r_lat=[];
+EEG.amica=[];
+EEG.icaact_sd1_lat=[];
+EEG.c_icaact1_sd_lat=[];
+EEG.icaact_sd2_lat=[];
+EEG.c_icaact_sd2_lat=[];
+EEG.icaact_ta_lat=[];
+EEG.c_icaact_ta_lat=[];
+EEG.icaact_b_lat=[];
+EEG.c_icaact_b_lat=[];
+EEG.icaact = [];
+EEG.icawinv = [];
+EEG.icasphere = [];
+EEG.icaweights = [];
+EEG.icachansind = [];
+
+%EEG.chaninfo.nosedir='-X';
+%EEG = interp_mont( EEG,'analysis/support/misc/standard_1020_bucanl19.elc','manual','on');
+%EEG = pop_interp_mont( EEG, 'analysis/support/misc/standard_1020_bucanl19.elc');
+%EEG = eeg_checkset(EEG);
+
+%EEG = pop_eegfiltnew(EEG, 1, 30,[], 0, [], 0);
+EEG = pop_eegfiltnew(EEG,[], 1,[],1,[],0);
+EEG = pop_eegfiltnew(EEG,[],30,[],0,[],0);
+
+
+for i=1:length(EEG.event)-1;
+    if strncmp(EEG.event(i).type,'dyn',3);
+        if EEG.event(i+2).latency>EEG.event(i).latency+EEG.srate+100;
+            EEG.event(length(EEG.event)+1).type='dynO';
+            EEG.event(length(EEG.event)).latency=EEG.event(i).latency+800/(1000/EEG.srate);
+        end
+    end
+end
+        
+for i=1:length(EEG.event)-1;
+    if strncmp(EEG.event(i).type,'Noi',3);
+        if EEG.event(i+1).latency>EEG.event(i).latency+EEG.srate+100;
+            EEG.event(length(EEG.event)+1).type='noisO';
+            EEG.event(length(EEG.event)).latency=EEG.event(i).latency+800/(1000/EEG.srate);
+        end
+    end
+end
+
+tmpEEG=EEG;
+
+seg_evts = { 'sta1' 'sta2' 'sta3' 'Nois' 'noisO' 'dynO'};
+
+if ~all(ismember(seg_evts,unique({EEG.event.type})));
+    disp(['SKIPPING ' '[batch_dfn]' ': missing some events.']);
+    return;
+end
+
+% static direct face
+EEG = pop_epoch( tmpEEG, { 'sta1' }, ...
+                 [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+EEG.condition = 'static_direct';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_dir_seg.set');
+
+% static indirect face
+EEG = pop_epoch( tmpEEG, { 'sta2' 'sta3' }, ...
+                 [-3 6], 'newname', 'indirect', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+EEG.condition = 'static_indirect';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_ind_seg.set');
+
+% noise face
+EEG = pop_epoch( tmpEEG, { 'Nois' }, ...
+                 [-3 6], 'newname', 'noise_face', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+EEG.condition = 'noise';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_nois_seg.set');
+
+% noise face offset
+EEG = pop_epoch( tmpEEG, { 'noisO' }, ...
+                 [-3 6], 'newname', 'nois_offset', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+EEG.condition = 'noise_offset';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_noisO_seg.set');
+
+% dynamic face offset
+EEG = pop_epoch( tmpEEG, { 'dynO' }, ...
+                 [-3 6], 'newname', 'dyn_offset', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+EEG.condition = 'dynamic_offset';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_dynO_seg.set');
+
+% all events
+EEG = pop_epoch( tmpEEG, { 'sta1' 'sta2' 'sta3' 'Nois' 'noisO' 'dynO'}, ...
+                 [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+EEG.condition = 'all_events';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_all_seg.set');

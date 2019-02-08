@@ -1,0 +1,20 @@
+%LOAD DATASET...
+sprintf('%s','Loading set file: [batch_dfn]...\n');
+EEG = pop_loadset('filename','[batch_dfn]');
+EEG = eeg_checkset( EEG );
+ALLEEG=EEG;
+
+[path,~,~] = fileparts('[batch_dfn]');
+path = [path,'/'];
+
+new_name = '[batch_dfn,_,-1]';
+new_name = strcat(new_name,'.set');
+[~,new_name] = fileparts(new_name);
+
+[ALLEEG,EEG]=pop_browsemerge(ALLEEG, ...
+			'infpath',path, ...
+			'outfname',new_name, ...
+			'outfpath',path, ...
+			'manual','on');
+
+ALLEEG=pop_delset(ALLEEG,1:length(ALLEEG));

@@ -1,0 +1,158 @@
+diary 'seg_qc_rank.log'
+
+logging_log('NOTICE', 'Starting seg script');
+
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+% add STUDY variables
+
+EEG.subject = EEG.filename(6:8);
+
+%if strcmp(EEG.filename(14:15),'06');
+%    EEG.group = '06';
+%elseif strcmp(EEG.filename(14:15),'12');
+%    EEG.group = '12';
+%else;
+%    EEG.group = '18';
+%end;
+
+fid = fopen('washington_rankings.csv');
+rline = fgetl(fid);
+while ischar(rline);
+   splitline = strsplit(rline,',');
+   fname = splitline(1);
+   fname = fname{1};
+   dfn = '[batch_dfn]';
+   dfn = dfn(1:77);
+   if strcmp(fname(1:77),dfn);
+       if str2num(char(splitline(2))) > 10;
+           EEG.group = 'hard';
+       else
+           EEG.group = 'easy';
+       end
+       break;
+   end
+   rline = fgetl(fid);
+end
+fclose(fid);
+
+if strcmp(EEG.filename(end-5),'_');
+    EEG.session = 1; % replicated
+else
+    EEG.session = 0; % original
+end;
+
+% Removed flagged channels and time segments
+sprintf('%s','Purging flagged channels...\n');
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+logging_log('INFO', 'TIME TO: PURGE DATA...');
+
+%purge unnecessary fields...
+for i=1:length(EEG.marks.time_info);
+    EEG.marks.time_info(i).flags=[];
+end
+EEG.data_sd_ep=[];
+EEG.c_data_sd_ep=[];
+EEG.data_sd_ch=[];
+EEG.c_data_sd_ch=[];
+EEG.m_neigbr_r_ch=[];
+EEG.c_neigbr_r_ch=[];
+EEG.m_neigbr_r_lat=[];
+EEG.c_neigbr_r_lat=[];
+EEG.amica=[];
+EEG.icaact_sd1_lat=[];
+EEG.c_icaact1_sd_lat=[];
+EEG.icaact_sd2_lat=[];
+EEG.c_icaact_sd2_lat=[];
+EEG.icaact_ta_lat=[];
+EEG.c_icaact_ta_lat=[];
+EEG.icaact_b_lat=[];
+EEG.c_icaact_b_lat=[];
+EEG.icaact = [];
+EEG.icawinv = [];
+EEG.icasphere = [];
+EEG.icaweights = [];
+EEG.icachansind = [];
+
+%EEG.chaninfo.nosedir='-X';
+%EEG = interp_mont( EEG,'analysis/support/misc/standard_1020_bucanl19.elc','manual','on');
+%EEG = pop_interp_mont( EEG, 'analysis/support/misc/standard_1020_bucanl19.elc');
+%EEG = eeg_checkset(EEG);
+
+%EEG = pop_eegfiltnew(EEG, 1, 30,[], 0, [], 0);
+EEG = pop_eegfiltnew(EEG,[], 1,[],1,[],0);
+EEG = pop_eegfiltnew(EEG,[],30,[],0,[],0);
+
+tmpEEG=EEG;
+
+seg_evts = { 'st+1' 'st+2' 'st-1' 'st-2' };
+
+if ~all(ismember(seg_evts,unique({EEG.event.type})));
+    disp(['SKIPPING ' '[batch_dfn]' ': missing some events.']);
+    return;
+end
+
+% face onset
+EEG = pop_epoch( tmpEEG, { 'st+1' }, ...
+                 [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+%EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+%        {'good'},'deleteevents','off',...
+%        'deleteepochs','on',...
+%        'invertepochs','off');
+EEG.condition = 'face_onset';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_faceon_seg.set');
+
+% face offset
+EEG = pop_epoch( tmpEEG, { 'st-1' }, ...
+                 [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+%EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+%        {'good'},'deleteevents','off',...
+%        'deleteepochs','on',...
+%        'invertepochs','off');
+EEG.condition = 'face_offset';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_faceoff_seg.set');
+
+% object onset
+EEG = pop_epoch( tmpEEG, { 'st+2' }, ...
+                 [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+%EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+%        {'good'},'deleteevents','off',...
+%        'deleteepochs','on',...
+%        'invertepochs','off');
+EEG.condition = 'object_onset';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_objon_seg.set');
+
+% object offset
+EEG = pop_epoch( tmpEEG, { 'st-2' }, ...
+                 [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+%EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+%        {'good'},'deleteevents','off',...
+%        'deleteepochs','on',...
+%        'invertepochs','off');
+EEG.condition = 'object_offset';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_objoff_seg.set');
+
+% all conditions
+EEG = pop_epoch( tmpEEG, { 'st+1' 'st-1' 'st+2' 'st-2' }, ...
+                 [-3 6], 'newname', 'direct', 'epochinfo', 'yes');
+EEG = pop_rmbase( EEG, [-200    0]);
+%EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+%        {'good'},'deleteevents','off',...
+%        'deleteepochs','on',...
+%        'invertepochs','off');
+EEG.condition = 'all_events';
+EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_all_seg.set');

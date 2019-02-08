@@ -1,0 +1,204 @@
+diary 'seg_resting_interp.log'
+
+logging_log('NOTICE', 'Starting seg script');
+
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+% add STUDY variables
+
+EEG.subject = EEG.filename(5:8);
+EEG.session = str2num(EEG.filename(15:16));
+
+EEG.group = '';
+fid = fopen('washington_participants.csv','r');
+rline = fgetl(fid);
+while ischar(rline);
+    splitline = strsplit(rline,',');
+    subj = splitline{1};
+    if strcmp(EEG.subject(2:end),subj);
+        risk = splitline{2};
+	    outcome = splitline{3};
+	    EEG.gender = splitline{4};
+        if strcmp(EEG.subject(1),'p');
+            EEG.group = 'pilot';
+	    elseif strcmp(risk,'LRC');
+            if strcmp(outcome,'no_asd');
+	            EEG.group = 'LRC';
+            elseif strcmp(outcome,'asd');
+	            EEG.group = 'LRC+';
+            elseif strcmp(outcome,'no_asd_18m');
+                EEG.group = 'LRC_18m';
+            elseif strcmp(outcome,'unknown');
+                EEG.group = 'LRC?';
+            end;
+	    elseif strcmp(outcome,'no_asd');
+	        EEG.group = 'HRA-';
+	    elseif strcmp(outcome,'no_asd_18m');
+	        EEG.group = 'HRA-_18m';
+        elseif strcmp(outcome,'asd');
+	        EEG.group = 'HRA+';
+        elseif strcmp(outcome,'asd_18m');
+	        EEG.group = 'HRA+_18m';
+        elseif strcmp(outcome,'unknown');
+            EEG.group = 'HRA?';         
+	    end;
+        break;
+    end;
+    rline = fgetl(fid);
+end;
+fclose(fid);
+
+socl_inds = find(strcmpi('Socl',{EEG.event.type}));
+toys_inds = find(strcmpi('Toys',{EEG.event.type}));
+endm_inds = find(strcmpi('EndM',{EEG.event.type}));
+
+if length(socl_inds)==1;
+    EEG.event(end+1).type = 'EndM';
+    EEG.event(end).latency = EEG.pnts;
+    endm_inds = find(strcmpi('EndM',{EEG.event.type}));
+end;
+if length(toys_inds)==1;
+    EEG.event(end+1).type = 'EndM';
+    EEG.event(end).latency = EEG.pnts;
+    endm_inds = find(strcmpi('EndM',{EEG.event.type}));
+end;
+
+%out_of_place = [];
+%if length(horzcat(socl_inds,toys_inds))~=length(endm_inds)*2;
+%    start_inds = sort(horzcat(socl_inds,toys_inds));
+%    disp('WARNING: [batch_dfn] file has extra or missing EndM events...');
+%    disp('Attempting to identify out-of-place event(s)...');
+%    for i=1:length(endm_inds);
+%        if (2*i)-2*length(out_of_place) > length(start_inds);
+%            out_of_place(end+1) = endm_inds(i);
+%            break;
+%        end
+%        if EEG.event(endm_inds(i)).latency<EEG.event(start_inds((2*i)-1-(2*length(out_of_place)))).latency;
+%            out_of_place(end+1) = endm_inds(i);
+%        end
+%    end
+%    if ~isempty(out_of_place);
+%        disp(['Identified event(s) ' num2str(out_of_place) ' as out of place.'])
+%        disp(['Removing ' num2str(length(out_of_place)) ' events...']);
+%        EEG.event(out_of_place) = [];
+%    end
+%    socl_inds = find(strcmpi('Socl',{EEG.event.type}));
+%    toys_inds = find(strcmpi('Toys',{EEG.event.type}));
+%    endm_inds = find(strcmpi('EndM',{EEG.event.type}));
+%end
+
+all_inds = sort(horzcat(socl_inds,toys_inds,endm_inds));
+for i=1:length(all_inds);
+    if ismember(all_inds(i),endm_inds);
+        EEG.event(all_inds(i)).type = [EEG.event(all_inds(i-1)).type '_EndM'];
+    end
+end
+
+EEG.event(socl_inds(2:2:end)) = [];
+toys_inds = find(strcmpi('Toys',{EEG.event.type}));
+EEG.event(toys_inds(2:2:end)) = [];
+
+no_socl_data = 0;
+try;
+EEG = pop_marks_event_gap(EEG,{'Socl','Socl_EndM'},[],'socl_rest',[0  0  1],'exact','on','ref_point','both','interval','on');
+catch;
+    disp(['SKIPPING Socl condition for ' EEG.filename ': No Socl markers.']);
+    no_socl_data = 1;
+end;
+
+no_toys_data = 0;
+try;
+EEG = pop_marks_event_gap(EEG,{'Toys','Toys_EndM'},[],'toys_rest',[0  1  0],'exact','on','ref_point','both','interval','on');
+catch;
+    disp(['SKIPPING Toys condition for ' EEG.filename ': No Toys markers.']);
+    if no_socl_data;
+        return;
+    end;
+    no_toys_data = 1;
+end;
+
+% Removed flagged channels and time segments
+sprintf('%s','Purging flagged channels...\n');
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+
+EEG = warp_locs(EEG,'derivatives/lossless/code/misc/GSN129.sfp', ...
+                    'transform',[2.188,-0.004311,0.1401,-0.0008313,0.04849,0.004047,0.09813,0.0907,0.08633],'manual','off');
+EEG = interp_mont( EEG,'derivatives/lossless/code/misc/GSN129.sfp','nfids',3,'manual','off');
+
+tmpEEG = EEG;
+
+types = {'socl_rest','toys_rest'};
+for t=1+no_socl_data:2-no_toys_data;
+    type = types{t};
+
+    if  ~isempty(find(tmpEEG.marks.time_info(1,find(strcmp({tmpEEG.marks.time_info.label},type))).flags));
+        EEG = pop_marks_select_data(tmpEEG,'time marks',[],'labels',{type},'remove','off');
+        EEG = eeg_checkset(EEG);
+    else;
+        disp(['SKIPPING ' type(1:4) ' condition for ' EEG.filename ': No good time points remaining.']);
+        continue;
+    end;
+
+    %EEG = warp_locs(EEG,'derivatives/lossless/code/misc/standard_1020_bucanl19.elc', ...
+    %                    'transform',[0,0,0,0,0,-1.57,1,1,1],'manual','on');
+    %EEG = interp_mont( EEG,'derivatives/lossless/code/misc/standard_1020_bucanl19.elc','manual','on');
+    %EEG.chaninfo.nosedir = '+Y';
+    %EEG = eeg_checkset(EEG);
+
+    EEG = marks_continuous2epochs(EEG,'recurrence',0.5,'limits',[-0.5 0.5],'keepboundary','on','eventtype','rest');
+
+    %purge unnecessary fields...
+    for i=1:length(EEG.marks.time_info);
+        EEG.marks.time_info(i).flags=[];
+    end
+    EEG.data_sd_ep=[];
+    EEG.c_data_sd_ep=[];
+    EEG.data_sd_ch=[];
+    EEG.c_data_sd_ch=[];
+    EEG.m_neigbr_r_ch=[];
+    EEG.c_neigbr_r_ch=[];
+    EEG.m_neigbr_r_lat=[];
+    EEG.c_neigbr_r_lat=[];
+    EEG.amica=[];
+    EEG.icaact_sd1_lat=[];
+    EEG.c_icaact1_sd_lat=[];
+    EEG.icaact_sd2_lat=[];
+    EEG.c_icaact_sd2_lat=[];
+    EEG.icaact_ta_lat=[];
+    EEG.c_icaact_ta_lat=[];
+    EEG.icaact_b_lat=[];
+    EEG.c_icaact_b_lat=[];
+    EEG.icaact = [];
+    EEG.icawinv = [];
+    EEG.icasphere = [];
+    EEG.icaweights = [];
+    EEG.icachansind = [];
+
+    if EEG.trials>1;
+        h=hanning(EEG.pnts);
+        hr=repmat(h,1,EEG.trials);
+
+        for i=1:size(EEG.data,1);
+            d=squeeze(EEG.data(i,:,:));
+            EEG.data(i,:,:)=d.*hr;
+        end
+        if isempty(EEG.event);
+            EEG.event = struct('type','','latency',NaN,'urevent',[],'duration',0,'epoch',0);
+        end
+        EEG.condition = type(1:4);
+        EEG = pop_saveset( EEG, 'filename',['[batch_dfn,_,-1]_' type '_seg.set']);
+    else;
+        disp(['SKIPPING ' type(1:4) ' condition for ' EEG.filename ': single trial remaining.']);
+    end;
+end;
+

@@ -1,0 +1,165 @@
+%diary 'seg_face_obj.log'
+
+logging_log('NOTICE', 'Starting seg script');
+
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+% add STUDY variables
+
+EEG.subject = EEG.filename(5:8);
+EEG.session = str2num(EEG.filename(15:16));
+
+EEG.group = '';
+fid = fopen('washington_participants.csv','r');
+rline = fgetl(fid);
+while ischar(rline);
+    splitline = strsplit(rline,',');
+    subj = splitline{1};
+    if strcmp(EEG.subject(1),'p');
+        EEG.group = 'pilot';
+        break;
+    end;
+    if strcmp(EEG.subject(2:end),subj);
+        risk = splitline{2};
+	    outcome = splitline{3};
+	    EEG.gender = splitline{4};
+	    if strcmp(risk,'LRC');
+            if strcmp(outcome,'no_asd');
+	            EEG.group = 'LRC-';
+            elseif strcmp(outcome,'asd');
+	            EEG.group = 'LRC+';
+            elseif strcmp(outcome,'no_asd_18m');
+                %EEG.group = 'LRC_18m';
+                EEG.group = 'LRC-';
+            elseif strcmp(outcome,'unknown');
+                EEG.group = 'LRC_maybe';
+            end;
+	    elseif strcmp(outcome,'no_asd');
+	        EEG.group = 'HRA-';
+	    elseif strcmp(outcome,'no_asd_18m');
+	        %EEG.group = 'HRA-_18m';
+            EEG.group = 'HRA-';
+        elseif strcmp(outcome,'asd');
+	        EEG.group = 'HRA+';
+        elseif strcmp(outcome,'asd_18m');
+	        %EEG.group = 'HRA+_18m';
+            EEG.group = 'HRA+';
+        elseif strcmp(outcome,'unknown');
+            EEG.group = 'HRA_maybe';         
+	    end;
+        break;
+    end;
+    rline = fgetl(fid);
+end;
+fclose(fid);
+
+% Removed flagged channels and time segments
+sprintf('%s','Purging flagged channels...\n');
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+logging_log('INFO', 'TIME TO: PURGE DATA...');
+
+%purge unnecessary fields...
+for i=1:length(EEG.marks.time_info);
+    EEG.marks.time_info(i).flags=[];
+end
+EEG.data_sd_ep=[];
+EEG.c_data_sd_ep=[];
+EEG.data_sd_ch=[];
+EEG.c_data_sd_ch=[];
+EEG.m_neigbr_r_ch=[];
+EEG.c_neigbr_r_ch=[];
+EEG.m_neigbr_r_lat=[];
+EEG.c_neigbr_r_lat=[];
+EEG.amica=[];
+EEG.icaact_sd1_lat=[];
+EEG.c_icaact1_sd_lat=[];
+EEG.icaact_sd2_lat=[];
+EEG.c_icaact_sd2_lat=[];
+EEG.icaact_ta_lat=[];
+EEG.c_icaact_ta_lat=[];
+EEG.icaact_b_lat=[];
+EEG.c_icaact_b_lat=[];
+EEG.icaact = [];
+EEG.icawinv = [];
+EEG.icasphere = [];
+EEG.icaweights = [];
+EEG.icachansind = [];
+
+EEG = warp_locs(EEG,'derivatives/lossless/code/misc/GSN129.sfp', ...
+                    'transform',[2.188,-0.004311,0.1401,-0.0008313,0.04849,0.004047,0.09813,0.0907,0.08633],'manual','off');
+EEG = interp_mont( EEG,'derivatives/lossless/code/misc/GSN129.sfp','nfids',3,'manual','off');
+
+EEG = pop_eegfiltnew(EEG,[], 1,[],1,[],0);
+EEG = pop_eegfiltnew(EEG,[],30,[],0,[],0);
+
+tmpEEG=EEG;
+
+% face onset
+try;
+    EEG = pop_epoch( tmpEEG, { 'st+1' }, ...
+                 [-0.5 1.5], 'newname', 'face_on', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    %EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+    %        {'good'},'deleteevents','off',...
+    %        'deleteepochs','on',...
+    %        'invertepochs','off');
+    EEG.condition = 'face_onset';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_faceon_seg.set');
+catch;
+    disp(['SKIPPING face onset condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% face offset
+try;
+    EEG = pop_epoch( tmpEEG, { 'st-1' }, ...
+                 [-0.5 1.5], 'newname', 'face_off', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    %EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+    %        {'good'},'deleteevents','off',...
+    %        'deleteepochs','on',...
+    %        'invertepochs','off');
+    EEG.condition = 'face_offset';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_faceoff_seg.set');
+catch;
+    disp(['SKIPPING face offset condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% object onset
+try;
+    EEG = pop_epoch( tmpEEG, { 'st+2' }, ...
+                     [-0.5 1.5], 'newname', 'obj_on', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    %EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+    %        {'good'},'deleteevents','off',...
+    %        'deleteepochs','on',...
+    %        'invertepochs','off');
+    EEG.condition = 'object_onset';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_objon_seg.set');
+catch;
+    disp(['SKIPPING object onset condition for ' EEG.filename ': No segments remaining.']);
+end;
+
+% object offset
+try;
+    EEG = pop_epoch( tmpEEG, { 'st-2' }, ...
+                     [-0.5 1.5], 'newname', 'obj_off', 'epochinfo', 'yes');
+    EEG = pop_rmbase( EEG, [-200    0]);
+    %EEG = pop_selectevent(EEG, 'latency', '100<=500','type',...
+    %        {'good'},'deleteevents','off',...
+    %        'deleteepochs','on',...
+    %        'invertepochs','off');
+    EEG.condition = 'object_offset';
+    EEG = pop_saveset( EEG, 'filename','[batch_dfn,.,-1]_objoff_seg.set');
+catch;
+    disp(['SKIPPING object offset condition for ' EEG.filename ': No segments remaining.']);
+end;

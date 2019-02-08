@@ -1,0 +1,258 @@
+%% this is a template segmentation script for resting data
+
+% keep a log file of entire batch (may comment this out)
+diary 'derivatives/lossless/diary/seg_resting.log'
+
+logging_log('NOTICE', 'Starting seg script');
+
+%% Load the data file
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+%% Add STUDY variables
+
+% subject and session number
+EEG.subject = EEG.filename(6:9); % change 6:9 to char indices of subject number within filename
+EEG.session = str2num(EEG.filename(16:17)); % change 16:17 to char indices of session number within filename
+
+% group and condition (this will differ depending on how these data are stored and what
+% we would like our group and/or condtion to be).
+% in this example, we read from a csv file containing columns for subject number, 
+% autism risk based on older sibling being on asd spectrum, actual autism diagnonsis
+% outcomes, and gender (group becomes autism outcome, and condition becomes gender).
+EEG.group = '';
+EEG.condition = '';
+
+fid = fopen('boston_participants.csv','r');
+rline = fgetl(fid);
+while ischar(rline);
+    splitline = strsplit(rline,',');
+    subj = splitline(1);
+    if strcmp(EEG.subject,subj);
+        risk = splitline(2);
+	    risk = str2num(risk{1});
+	    outcome = splitline(3);
+	    outcome = str2num(outcome{1});
+	    gender = splitline(4);
+   	    EEG.condition = gender{:};
+	    if risk>1;
+            if outcome==0;
+	            EEG.group = 'control';
+            else;
+                EEG.group = 'con-asd';
+            end;
+	    elseif outcome==1;
+	        EEG.group = 'asd';
+	    else;
+	        EEG.group = 'at-risk';
+	    end;
+    end;
+    rline = fgetl(fid);
+end;
+fclose(fid);
+
+% if subject doesn't fit any group, change group to 'NA' (optional)
+if strcmp(EEG.group,'');
+    EEG.group = 'NA';
+end
+
+% if subject doesn't fit any condition, change condition to 'NA' (optional)
+if strcmp(EEG.condition,'');
+    EEG.condition = 'NA';
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Resting markers are present (optional)
+% NOTE: this is only required if onset and/or offset 
+% markers exist for the resting data.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% CASE A: Both onset and offset markers are present 
+% (Rst0 and Rst1 in this case).
+
+start_inds = find(strcmpi('Rst0',{EEG.event.type}));
+end_inds = find(strcmpi('Rst1',{EEG.event.type}));
+
+if isempty(start_inds) || isempty(end_inds);
+    disp('SKIPPING [batch_dfn]: no Rst0 or Rst1 markers in dataset.');
+    return;
+end;
+if length(start_inds)~=length(end_inds);
+    disp('SKIPPING [batch_dfn]: different number of Rst0 and Rst1 markers.');
+    return;
+end;
+
+% create a vised mark for the resting time periods
+EEG = pop_marks_event_gap(EEG,{'Rst0','Rst1'},[],'rest',[0  1  0],'exact','on','ref_point','both','interval','on');
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% CASE B: Only the onset marker is present and we have different resting video types
+% (Rst0 in this case, and eeg1, eeg2, eeg3 for type).
+% in this example, we simply use the following marker,
+% or the end of file as the offset.
+
+rest_inds = find(strcmpi('Rst0',{EEG.event.type}));
+
+if isempty(rest_inds);
+    disp('SKIPPING [batch_dfn]: no Rst0 markers in dataset');
+    return;
+end;
+
+end_inds = rest_inds+1;
+
+eeg_inds = {};
+for i=1:length(rest_inds);
+    eeg_inds{i} = find(cell2mat({EEG.event.latency})==EEG.event(rest_inds(i)).latency);
+    eeg_inds{i} = setdiff(eeg_inds{i},rest_inds);
+end;
+
+eeg_inds = cell2mat(eeg_inds);
+
+% assuming there are 3 different resting video types, and we know their actual time length,
+% we will create a new offset marker for each video, either to the next marker, 
+% to the max video time for each video, or to the end of file.
+for i=1:length(end_inds);
+    EEG.event(end+1).type = [EEG.event(eeg_inds(i)).type '_off'];
+    if EEG.event(end_inds(i)).latency>EEG.event(eeg_inds(i)).latency;
+        EEG.event(end).latency = EEG.event(end_inds(i)).latency;
+    elseif strcmp(EEG.event(eeg_inds(i)).type,'eeg1') && EEG.pnts - EEG.event(eeg_inds(i)).latency > 22187;
+        EEG.event(end).latency = EEG.event(eeg_inds(i)).latency + 22187;
+    elseif strcmp(EEG.event(eeg_inds(i)).type,'eeg2') && EEG.pnts - EEG.event(eeg_inds(i)).latency > 20987;
+        EEG.event(end).latency = EEG.event(eeg_inds(i)).latency + 20987;
+    elseif strcmp(EEG.event(eeg_inds(i)).type,'eeg3') && EEG.pnts - EEG.event(eeg_inds(i)).latency > 16248;
+        EEG.event(end).latency = EEG.event(eeg_inds(i)).latency + 16248;        
+    else;
+        EEG.event(end).latency = EEG.pnts;
+    end;
+end  
+
+% create a vised mark for each of the resting time periods
+EEG = pop_marks_event_gap(EEG,{'eeg1','eeg1_off'},[],'eeg1_rest',[1  0  0],'exact','on','ref_point','both','interval','on');
+EEG = pop_marks_event_gap(EEG,{'eeg2','eeg2_off'},[],'eeg2_rest',[0  1  0],'exact','on','ref_point','both','interval','on');
+EEG = pop_marks_event_gap(EEG,{'eeg3','eeg3_off'},[],'eeg3_rest',[0  0  1],'exact','on','ref_point','both','interval','on');
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% Purge flagged channels and time segments
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+
+%% Interpolation
+% only perform this step before segmenting if you are interpolating back to original montage.
+% otherwise, perform it after segmenting and purging (example below).
+% NOTE: the transformation matrix will vary depending on original montage. If this is unknown,
+% 'manual' must be switched to 'on' in order to visually inspect and determine the correct 
+% transformation matrix, which can then be pasted below. Then, 'manual' can be switched back to 'off'.
+
+% For GSN-HydroCel-129_EEGLAB.sfp montage
+%EEG = warp_locs(EEG,'derivatives/lossless/code/misc/GSN-HydroCel-129_EEGLAB.sfp', ...
+%                    'transform',[1.494,0.006093,0.6833,-0.0007808,-0.0234,-0.0006312,0.08927,0.08774,0.08076],'manual','off');
+%EEG = interp_mont( EEG,'derivatives/lossless/code/misc/GSN-HydroCel-129_EEGLAB.sfp','nfids',3,'manual','off');
+
+% For GSN-129.sfp montage
+%EEG = warp_locs(EEG,'derivatives/lossless/code/misc/GSN129.sfp', ...
+%                    'transform',[2.188,-0.004311,0.1401,-0.0008313,0.04849,0.004047,0.09813,0.0907,0.08633],'manual','off');
+%EEG = interp_mont( EEG,'derivatives/lossless/code/misc/GSN129.sfp','nfids',3,'manual','off');
+
+
+tmpEEG = EEG;
+
+%% Segmentation
+for type=1:3; % only necessary for CASE B, where multiple types of resting events are present
+
+
+% Purge all time periods that aren't resting (perform this step before purging below).
+% If CASE A
+EEG = pop_marks_select_data(tmpEEG,'time marks',[],'labels',{'rest'},'remove','off');
+% If CASE B
+EEG = pop_marks_select_data(tmpEEG,'time marks',[],'labels',{['eeg' num2str(type) '_rest']},'remove','off');
+EEG = eeg_checkset(EEG);
+
+%% Create Epochs
+% 1-sec, non-overlapping windows
+%EEG = marks_continuous2epochs(EEG,'recurrence',1,'limits',[0 1],'keepboundary','on','eventtype','rest');
+% 4-sec, 50% overlapping windows
+EEG = marks_continuous2epochs(EEG,'recurrence',2,'limits',[-2 2],'keepboundary','on','eventtype','rest');
+
+% Skip files with less than 10 remaining segments (optional)
+if EEG.trials<10;
+    disp(['SKIPPING ' EEG.filename ': Fewer than 10 segments remaining.']);
+    return;
+end;
+
+%% Purge remaining unnecessary fields
+for i=1:length(EEG.marks.time_info);
+    EEG.marks.time_info(i).flags=[];
+end
+EEG.data_sd_ep=[];
+EEG.c_data_sd_ep=[];
+EEG.data_sd_ch=[];
+EEG.c_data_sd_ch=[];
+EEG.m_neigbr_r_ch=[];
+EEG.c_neigbr_r_ch=[];
+EEG.m_neigbr_r_lat=[];
+EEG.c_neigbr_r_lat=[];
+EEG.amica=[];
+EEG.icaact_sd1_lat=[];
+EEG.c_icaact1_sd_lat=[];
+EEG.icaact_sd2_lat=[];
+EEG.c_icaact_sd2_lat=[];
+EEG.icaact_ta_lat=[];
+EEG.c_icaact_ta_lat=[];
+EEG.icaact_b_lat=[];
+EEG.c_icaact_b_lat=[];
+EEG.icaact = [];
+EEG.icawinv = [];
+EEG.icasphere = [];
+EEG.icaweights = [];
+EEG.icachansind = [];
+
+%% Interpolation
+% Interpolate to the 19 channel 10/20 montage (see more about interpolation above)
+EEG = warp_locs(EEG,'derivatives/lossless/code/misc/standard_1020_bucanl19.elc', ...
+                    'transform',[0,0,0,0,0,-1.57,1,1,1],'manual','off');
+EEG = interp_mont(EEG,'derivatives/lossless/code/misc/standard_1020_bucanl19.elc','manual','off');
+EEG.chaninfo.nosedir = '+Y';
+EEG = eeg_checkset(EEG);
+
+% Interpolate to the 97 channel 10/20 montage
+%EEG = warp_locs(EEG,'derivatives/lossless/code/misc/standard_1020.elc', ...
+%                    'transform',[0 0 0 0 0 -1.57 1.08 1.08 1.08],'manual','off');
+%EEG = interp_mont(EEG,'derivatives/lossless/code/misc/standard_1020.elc','manual','off');
+%EEG.chaninfo.nosedir = '+Y';
+%EEG = eeg_checkset(EEG);
+
+try;
+    %% Apply hanning window (optional)
+    h=hanning(EEG.pnts);
+    hr=repmat(h,1,EEG.trials);
+    for i=1:size(EEG.data,1);
+        d=squeeze(EEG.data(i,:,:));
+        EEG.data(i,:,:)=d.*hr;
+    end
+    
+    % if bug occurs related to EEG.event being empty, uncomment the 3 lines below:
+    %if isempty(EEG.event);
+    %    EEG.event = struct('type','','latency',NaN,'urevent',[],'duration',0,'epoch',0);
+    %end
+    
+    % if there are multiple video types (for loop above)
+    EEG.session = type;
+    EEG = pop_saveset( EEG, 'filename',['[batch_dfn,_,-1]_rest' num2str(type) '_seg.set']);
+    % if there is only one resting type (for loop above not required)
+    EEG = pop_saveset( EEG, 'filename',['[batch_dfn,_,-1]_rest_seg.set']);
+catch;
+    disp(['SKIPPING ' EEG.filename ': No segments remaining.']);
+end;
+
+end;
+

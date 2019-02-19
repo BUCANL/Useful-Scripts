@@ -1,4 +1,4 @@
-diary 'derivatives/lossless/diary/seg_resting_4sec_overlap_hanning.log'
+%diary 'seg_resting_4sec_overlap_hanning.log'
 
 logging_log('NOTICE', 'Starting seg script');
 
@@ -31,17 +31,31 @@ while ischar(rline);
 	    outcome = str2num(outcome{1});
 	    gender = splitline(4);
    	    EEG.condition = gender{:};
-	    if risk>1;
+        if risk==0;
+	        if outcome==0;
+	            EEG.group = 'HRA-';
+            elseif outcome==1;
+	            EEG.group = 'HRA+';
+	        else;
+	            EEG.group = 'HRA_UKN';
+	        end;
+	    elseif risk==1;
             if outcome==0;
-	            EEG.group = 'control';
+	            EEG.group = 'LRC-';
+            elseif outcome==1;
+                EEG.group = 'LRC+';
             else;
-                EEG.group = 'con-asd';
+                EEG.group = 'LRC_UKN';
             end;
-	    elseif outcome==1;
-	        EEG.group = 'asd';
-	    else;
-	        EEG.group = 'at-risk';
-	    end;
+        else;
+            if outcome==0;
+	            EEG.group = 'lang-';
+            elseif outcome==1;
+                EEG.group = 'lang+';
+            else;
+                EEG.group = 'lang_UKN';
+            end;
+        end;
     end;
     rline = fgetl(fid);
 end;
@@ -121,9 +135,9 @@ try;
         d=squeeze(EEG.data(i,:,:));
         EEG.data(i,:,:)=d.*hr;
     end
-    %if isempty(EEG.event);
-    %    EEG.event = struct('type','','latency',NaN,'urevent',[],'duration',0,'epoch',0);
-    %end
+    if isempty(EEG.event);
+        EEG.event = struct('type','','latency',NaN,'urevent',[],'duration',0,'epoch',0);
+    end
     EEG = pop_saveset( EEG, 'filename','[batch_dfn,_,-1]_seg.set');
 catch;
     disp(['SKIPPING ' EEG.filename ': No segments remaining.']);

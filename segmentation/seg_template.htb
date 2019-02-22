@@ -1,0 +1,261 @@
+%% SCRIPT DESCRIPTION
+% this is a template segmentation script for ERP task data
+%
+%% From Config          key_strswap         Description
+%-----------------------------------------------------------------------------------------------------------------------------
+%    in_path =           [in_path]           Relative path to input data files assuming cd = work_path
+%    seg_type =          [seg_type]          Type of segmentation (task OR rest)
+%    seg_staging =       [seg_staging]       Name of .m script file containing staging of subject demographics info
+%	 montage_info =      [montage_info]      Transformations matrix to fit channel locations on a standard surface 
+%                                            (e.g. [-.14,-22,-48,-.07,0,-1.57,1080,1260,1240])                                           
+%	 ref_loc_file =      [ref_loc_file]      Name of file containing the reference locations (including the relative path)
+%    nfids =             [nfids]             Number of fiducials in the ref_loc_file (e.g. 3)
+%    nose_dir =          [nose_dir]          Nose direction of montage to apply after interpolation
+%    subj_inds =         [subj_inds]         Indices of characters within the filename that represent subject number (optional) (e.g. [6:8])
+%    sess_inds =         [sess_inds]         Indices of characters within the filename that represent session number (optional) (e.g. [15:16])
+%    conditions =        [conditions]        Cell array of marker names to use for segmentation
+%    cond_groups =       [cond_groups]       Matrix of the same size as [conditions] that represents the groupings of each condition (e.g. [1,2,2,3,4,4,5])
+%    cond_names =        [cond_names]        Cell array of names of each condition grouping (should be the same size as the number of groups in cond_groups)
+%    rest_off =          [rest_off]          Cell array of offset markers used to determine the end of a resting period (e.g. 'EndT')
+%    sel_event =         [sel_event]         Select only trials with this/these event(s) in them (optional) (e.g. {'good_trial'})
+%    sel_lat =           [sel_lat]           Latency range (in time points) in which to find [sel_event] in each epoch
+%                                            (this may also be a cell array of latency ranges for each condition group if each one uses a different range)
+%                                            (e.g. -250<=750 OR {''-250<=750'',''-1000<=0''} NOTE: use double quotes in cell array to avoid syntax error)
+%    sel_invert =        [sel_invert]        Invert event selection such that only epochs which don't include [sel_event] are used (e.g. on or off)
+%    low_bound_hz =      [low_bound_hz]      Lower bound of the filter pass-band
+%    high_bound_hz =     [high_bound_hz]     Upper bound of the filter pass-band
+%    resample =          [resample]          Adjust the sample rate (optional) (e.g. 500)
+%    rest_recur =        [rest_recur]        Recurrence of resting epochs (e.g. 0.5)
+%    win_size =          [win_size]          Size and limits of each epoch ( e.g. [-1 1] OR {[-1 1],[-0.5 1.5]} )
+%                                            (this may also be a cell array of window sizes for each condition group if each one uses a different size)
+%    hanning =           [hanning]           Boolean for whether a hanning window should be applied to resting data (e.g. true (1) or false (0))
+%    rm_base =           [rm_base]           baseline correction (in ms) to be applied (e.g. [-200 0])
+%    out_path =          [out_path]          Relative path to output data files assuming cd = work_path
+
+%% keep a log file of entire batch (may comment this out)
+%diary 'derivatives/lossless/diary/seg_task.log'
+
+logging_log('NOTICE', 'Starting seg script');
+
+[path name ext] = fileparts('[batch_dfn]');
+if ~strcmp(ext,'.set')
+    logging_log('ERROR', sprintf('Wrong file format: %s should be .set',ext));
+    exit(1);
+end
+logging_log('INFO', 'Loading set file: [batch_dfn]...');
+EEG = pop_loadset('filename','[batch_dfn]','filepath','[batch_dfp]');
+EEG = eeg_checkset( EEG );
+
+%% add STUDY variables
+if [[subj_inds]];
+    EEG.subject = EEG.filename([subj_inds]);
+else;
+    EEG.subject = EEG.filename([5:8]);
+end;
+
+if [[sess_inds]];
+    EEG.session = EEG.filename([sess_inds]);
+else;
+    EEG.session = EEG.filename([15:16]);
+end;
+
+%% execute the seg staging script if specified
+% this should include code for parsing demographics info from a csv/tsv 
+% file into EEG.group, and any other code to prepare events in a file  
+if exist('[seg_staging]');
+    [ssp,ssn,sse]=fileparts('[seg_staging]');
+    addpath(ssp);
+    eval(ssn);
+end
+
+conditions = [conditions];
+
+%% add time marks for resting data
+if strncmp('[seg_type]','rest',4);
+    rest_off = {[rest_off]};
+    if ~isempty(rest_off); rest_off = rest_off{:}; end;
+    no_data = zeros(1,length(conditions));
+    for c=1:length(conditions);
+        try;
+            EEG = pop_marks_event_gap(EEG,{conditions{c},rest_off{c}},[],cond_names{c}, ...
+                   [0 1 0],'exact','on','ref_point','both','interval','on');
+        catch;
+            no_data(c) = 1;
+            disp(['SKIPPING ' conditions{c} ' condition for ' EEG.filename ': No ' conditions{c} ' markers.']);
+        end;
+    end;
+end;
+
+%% group events into conditions
+cond_names = [cond_names];
+if isempty([[cond_groups]]);
+    cond_groups = [conditions];
+else;
+    group_inds = [cond_groups];
+    cond_groups = zeros(1,length(unique(group_inds)));
+    cond_groups = mat2cell(cond_groups,[1],ones(1,length(unique(group_inds))));
+    for c=1:length(conditions);
+        if isnumeric(cond_groups{group_inds(c)});
+            cond_groups{group_inds(c)} = conditions(c);
+        else;
+            cond_groups{group_inds(c)} = horzcat(cond_groups{group_inds(c)},conditions(c));
+        end;
+    end;
+end;
+
+%% remove flagged channels and time segments
+sprintf('%s','Purging flagged channels...\n');
+EEG = pop_marks_select_data(EEG,'channel marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'time marks',[],'labels',{'manual'},'remove','on');
+EEG = pop_marks_select_data(EEG,'component marks',[],'labels',{'manual'},'remove','on');
+EEG = eeg_checkset(EEG);
+logging_log('INFO', 'TIME TO: PURGE DATA...');
+
+% for task-based paradigms only
+if strncmp('[seg_type]','task',4);
+    %% resample the data
+    if ([[resample]]);
+        if EEG.srate~=[[resample]];
+            EEG = pop_resample(EEG,[[resample]]);
+        end;
+    end;
+    %% interpolate
+    EEG = warp_locs(EEG,'[ref_loc_file]','transform',[montage_info],'manual','off');
+    EEG = interp_mont( EEG,'[ref_loc_file]','nfids',[nfids],'manual','off');
+    if ~isempty('[nose_dir]');
+        EEG.chaninfo.nosedir = '[nose_dir]';
+    end;
+    EEG = eeg_checkset(EEG);
+end;
+
+%% filter the data
+if ([[low_bound_hz]]);
+    EEG = pop_eegfiltnew(EEG,[],[[low_bound_hz]],[],1,[],0);
+end;
+if ([[high_bound_hz]]);
+    EEG = pop_eegfiltnew(EEG,[],[[high_bound_hz]],[],0,[],0);
+end;
+
+tmpEEG=EEG;
+
+for c=1:length(cond_groups);
+
+    if strncmp('[seg_type]','task',4); % task segmentation
+        try;
+            if iscell([win_size]); % different window sizes for each condition
+                win_size = [win_size];
+                EEG = pop_epoch( tmpEEG, cond_groups{1,c},win_size{c}, ...
+                                'newname', cond_names{c}, 'epochinfo', 'yes');
+                EEG = pop_rmbase(EEG, [rm_base]);
+            else;                  % same window size for each condition
+                EEG = pop_epoch( tmpEEG, cond_groups{1,c},[win_size], ...
+                                'newname', cond_names{c}, 'epochinfo', 'yes');
+                EEG = pop_rmbase(EEG, [rm_base]);
+            end;        
+            if ~isempty([[sel_event]]);
+                sel_event = {[sel_event]};
+                sel_lat = {eval(strrep('[sel_lat]','''''',''''))};
+                if iscell(sel_lat{:}); % different latency window to search for each condition
+                    sel_lat = sel_lat{:};
+                    EEG = pop_selectevent(EEG, 'latency',sel_lat{c},'type',...
+                            sel_event{:},'deleteevents','off',...
+                            'deleteepochs','on',...
+                            'invertepochs','[sel_invert]');
+                else;                 % same latency window to search for all conditions
+                    EEG = pop_selectevent(EEG, 'latency','[sel_lat]','type',...
+                            sel_event{:},'deleteevents','off',...
+                            'deleteepochs','on',...
+                            'invertepochs','[sel_invert]');
+                end;
+            end;
+        catch;
+            disp(['SKIPPING ' cond_names{c} ' condition for ' EEG.filename ': No segments remaining.']);
+            continue;
+        end;
+
+    elseif strncmp('[seg_type]','rest',4); % rest segmentation
+
+        if no_data(c); continue; end;
+
+        if  ~isempty(find(tmpEEG.marks.time_info(1,find(strcmp({tmpEEG.marks.time_info.label},cond_names{c}))).flags));
+            EEG = pop_marks_select_data(tmpEEG,'time marks',[],'labels',{cond_names{c}},'remove','off');
+            EEG = eeg_checkset(EEG);
+        else;
+            disp(['SKIPPING ' cond_names{c} ' condition for ' EEG.filename ': No good time points remaining.']);
+            continue;
+        end;
+
+        EEG = marks_continuous2epochs(EEG,'recurrence',[[rest_recur]],'limits',[win_size],'keepboundary','on','eventtype','rest');
+
+        for i=1:length(EEG.marks.time_info);
+            EEG.marks.time_info(i).flags=[];
+        end
+
+        % for resting paradigms only
+        %% resample the data
+        if ([[resample]]);
+            if EEG.srate~=[[resample]];
+                EEG = pop_resample(EEG,[[resample]]);
+            end;
+        end;
+
+        %% interpolate
+        EEG = warp_locs(EEG,'[ref_loc_file]','transform',[montage_info],'manual','off');
+        EEG = interp_mont( EEG,'[ref_loc_file]','nfids',[nfids],'manual','off');
+        if ~isempty('[nose_dir]');
+            EEG.chaninfo.nosedir = '[nose_dir]';
+        end;
+        EEG = eeg_checkset(EEG);
+
+        if EEG.trials>1;
+            if [[hanning]]; %% apply hanning window
+                h=hanning(EEG.pnts);
+                hr=repmat(h,1,EEG.trials);
+
+                for i=1:size(EEG.data,1);
+                    d=squeeze(EEG.data(i,:,:));
+                    EEG.data(i,:,:)=d.*hr;
+                end
+            end;
+            if isempty(EEG.event);
+                EEG.event = struct('type','','latency',NaN,'urevent',[],'duration',0,'epoch',0);
+            end
+        else;
+            disp(['SKIPPING ' cond_names{c} ' condition for ' EEG.filename ': single trial remaining.']);
+            continue;
+        end;
+    else;
+        disp('ERROR: invalid seg_type: [seg_type]. Must be task OR rest.');
+        continue;
+    end;
+
+    %% purge unnecessary fields
+    for i=1:length(EEG.marks.time_info);
+        EEG.marks.time_info(i).flags=[];
+    end
+    EEG.data_sd_ep=[];
+    EEG.c_data_sd_ep=[];
+    EEG.data_sd_ch=[];
+    EEG.c_data_sd_ch=[];
+    EEG.m_neigbr_r_ch=[];
+    EEG.c_neigbr_r_ch=[];
+    EEG.m_neigbr_r_lat=[];
+    EEG.c_neigbr_r_lat=[];
+    EEG.amica=[];
+    EEG.icaact_sd1_lat=[];
+    EEG.c_icaact1_sd_lat=[];
+    EEG.icaact_sd2_lat=[];
+    EEG.c_icaact_sd2_lat=[];
+    EEG.icaact_ta_lat=[];
+    EEG.c_icaact_ta_lat=[];
+    EEG.icaact_b_lat=[];
+    EEG.c_icaact_b_lat=[];
+    EEG.icaact = [];
+    EEG.icawinv = [];
+    EEG.icasphere = [];
+    EEG.icaweights = [];
+    EEG.icachansind = [];
+
+    EEG.condition = cond_names{c};
+    EEG = pop_saveset(EEG, 'filename',['[batch_dfn,_,-1]_' cond_names{c} '_seg.set']);
+end;

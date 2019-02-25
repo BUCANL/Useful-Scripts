@@ -68,14 +68,22 @@ if exist('[seg_staging]');
     eval(ssn);
 end
 
-conditions = [conditions];
+conditions = [[conditions]];
+cond_names = [cond_names];
 
-%% add time marks for resting data
-if strncmp('[seg_type]','rest',4);
+%% add time marks for resting data if there are onset/offset resting markers
+no_data = 0;
+if strncmp('[seg_type]','rest',4) & iscell(conditions);
     rest_off = {[rest_off]};
     if ~isempty(rest_off); rest_off = rest_off{:}; end;
-    no_data = zeros(1,length(conditions));
+    no_data = zeros(1,length(cond_names));
     for c=1:length(conditions);
+        if length(conditions)>length(cond_names);
+            cond_tmp = cond_names;
+            for i=1:length(conditions)-length(cond_names);
+                cond_names = horzcat(cond_names,cond_tmp);
+            end;
+        end;
         try;
             EEG = pop_marks_event_gap(EEG,{conditions{c},rest_off{c}},[],cond_names{c}, ...
                    [0 1 0],'exact','on','ref_point','both','interval','on');
@@ -89,9 +97,13 @@ end;
 %% group events into conditions
 cond_names = [cond_names];
 if isempty([[cond_groups]]);
-    cond_groups = [conditions];
+    if isempty([[conditions]]);
+        cond_groups = {''};
+    else;
+        cond_groups = [[conditions]];
+    end;
 else;
-    group_inds = [cond_groups];
+    group_inds = [[cond_groups]];
     cond_groups = zeros(1,length(unique(group_inds)));
     cond_groups = mat2cell(cond_groups,[1],ones(1,length(unique(group_inds))));
     for c=1:length(conditions);
@@ -177,12 +189,14 @@ for c=1:length(cond_groups);
 
         if no_data(c); continue; end;
 
-        if  ~isempty(find(tmpEEG.marks.time_info(1,find(strcmp({tmpEEG.marks.time_info.label},cond_names{c}))).flags));
-            EEG = pop_marks_select_data(tmpEEG,'time marks',[],'labels',{cond_names{c}},'remove','off');
-            EEG = eeg_checkset(EEG);
-        else;
-            disp(['SKIPPING ' cond_names{c} ' condition for ' EEG.filename ': No good time points remaining.']);
-            continue;
+        if ~isempty([[rest_off]]);
+            if ~isempty(find(tmpEEG.marks.time_info(1,find(strcmp({tmpEEG.marks.time_info.label},cond_names{c}))).flags));
+                EEG = pop_marks_select_data(tmpEEG,'time marks',[],'labels',{cond_names{c}},'remove','off');
+                EEG = eeg_checkset(EEG);
+            else;
+                disp(['SKIPPING ' cond_names{c} ' condition for ' EEG.filename ': No good time points remaining.']);
+                continue;
+            end;
         end;
 
         EEG = marks_continuous2epochs(EEG,'recurrence',[[rest_recur]],'limits',[win_size],'keepboundary','on','eventtype','rest');
@@ -256,6 +270,8 @@ for c=1:length(cond_groups);
     EEG.icaweights = [];
     EEG.icachansind = [];
 
-    EEG.condition = cond_names{c};
+    if strcmp(EEG.condition,'');
+        EEG.condition = cond_names{c};
+    end;
     EEG = pop_saveset(EEG, 'filename',['[batch_dfn,_,-1]_' cond_names{c} '_seg.set']);
 end;

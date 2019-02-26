@@ -13,9 +13,9 @@
 %    nose_dir =          [nose_dir]          Nose direction of montage to apply after interpolation
 %    subj_inds =         [subj_inds]         Indices of characters within the filename that represent subject number (optional) (e.g. [6:8])
 %    sess_inds =         [sess_inds]         Indices of characters within the filename that represent session number (optional) (e.g. [15:16])
-%    conditions =        [conditions]        Cell array of marker names to use for segmentation
-%    cond_groups =       [cond_groups]       Matrix of the same size as [conditions] that represents the groupings of each condition (e.g. [1,2,2,3,4,4,5])
-%    cond_names =        [cond_names]        Cell array of names of each condition grouping (should be the same size as the number of groups in cond_groups)
+%    conditions =        [conditions]        Cell array of marker names to use for segmentation (conditions can be grouped with nested cell arrays)
+%                                            (e.g. {'onset1',{'onset2','onset3'},'offset1',{'offset2,'offset3'}})
+%    cond_names =        [cond_names]        Cell array of names of each condition grouping (should be the same size as the number of condition groupings)
 %    rest_off =          [rest_off]          Cell array of offset markers used to determine the end of a resting period (e.g. 'EndT')
 %    sel_event =         [sel_event]         Select only trials with this/these event(s) in them (optional) (e.g. {'good_trial'})
 %    sel_lat =           [sel_lat]           Latency range (in time points) in which to find [sel_event] in each epoch
@@ -33,7 +33,7 @@
 %    out_path =          [out_path]          Relative path to output data files assuming cd = work_path
 
 %% keep a log file of entire batch (may comment this out)
-%diary 'derivatives/lossless/diary/seg_task.log'
+%diary 'derivatives/lossless/diary/seg.log'
 
 logging_log('NOTICE', 'Starting seg script');
 
@@ -69,14 +69,14 @@ if exist('[seg_staging]');
 end
 
 conditions = [[conditions]];
-cond_names = [cond_names];
 
 %% add time marks for resting data if there are onset/offset resting markers
 no_data = 0;
 if strncmp('[seg_type]','rest',4) & iscell(conditions);
+    cond_names = [cond_names];
     rest_off = {[rest_off]};
-    if ~isempty(rest_off); rest_off = rest_off{:}; end;
     no_data = zeros(1,length(cond_names));
+    if ~isempty(rest_off); rest_off = rest_off{:}; end;
     for c=1:length(conditions);
         if length(conditions)>length(cond_names);
             cond_tmp = cond_names;
@@ -94,24 +94,17 @@ if strncmp('[seg_type]','rest',4) & iscell(conditions);
     end;
 end;
 
-%% group events into conditions
 cond_names = [cond_names];
-if isempty([[cond_groups]]);
-    if isempty([[conditions]]);
-        cond_groups = {''};
-    else;
-        cond_groups = [[conditions]];
-    end;
+
+if isempty([[conditions]]);
+    conditions = {''};
 else;
-    group_inds = [[cond_groups]];
-    cond_groups = zeros(1,length(unique(group_inds)));
-    cond_groups = mat2cell(cond_groups,[1],ones(1,length(unique(group_inds))));
-    for c=1:length(conditions);
-        if isnumeric(cond_groups{group_inds(c)});
-            cond_groups{group_inds(c)} = conditions(c);
-        else;
-            cond_groups{group_inds(c)} = horzcat(cond_groups{group_inds(c)},conditions(c));
-        end;
+    conditions = [[conditions]];
+end;
+
+for c=1:length(conditions);
+    if ~iscell(conditions{1,c});
+        conditions{1,c}=cellstr(conditions{1,c});
     end;
 end;
 
@@ -150,17 +143,17 @@ end;
 
 tmpEEG=EEG;
 
-for c=1:length(cond_groups);
+for c=1:length(cond_names);
 
     if strncmp('[seg_type]','task',4); % task segmentation
         try;
             if iscell([win_size]); % different window sizes for each condition
                 win_size = [win_size];
-                EEG = pop_epoch( tmpEEG, cond_groups{1,c},win_size{c}, ...
+                EEG = pop_epoch( tmpEEG, conditions{1,c},win_size{c}, ...
                                 'newname', cond_names{c}, 'epochinfo', 'yes');
                 EEG = pop_rmbase(EEG, [rm_base]);
-            else;                  % same window size for each condition
-                EEG = pop_epoch( tmpEEG, cond_groups{1,c},[win_size], ...
+            else;                  % same window size for all conditions
+                EEG = pop_epoch( tmpEEG, conditions{1,c},[win_size], ...
                                 'newname', cond_names{c}, 'epochinfo', 'yes');
                 EEG = pop_rmbase(EEG, [rm_base]);
             end;        

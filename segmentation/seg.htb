@@ -24,7 +24,7 @@
 %    sel_invert =        [sel_invert]        Invert event selection such that only epochs which don't include [sel_event] are used (e.g. on or off)
 %    low_bound_hz =      [low_bound_hz]      Lower bound of the filter pass-band
 %    high_bound_hz =     [high_bound_hz]     Upper bound of the filter pass-band
-%    reref =             [reref]             Perform average rereferencing after purging and interpolating (e.g. yes or no)
+%    reref =             [reref]             Perform average rereferencing after purging and interpolating (e.g. on or off)
 %    resample =          [resample]          Adjust the sample rate (optional) (e.g. 500)
 %    rest_recur =        [rest_recur]        Recurrence of resting epochs (e.g. 0.5)
 %    win_size =          [win_size]          Size and limits of each epoch ( e.g. [-1 1] OR {[-1 1],[-0.5 1.5]} )

@@ -1,0 +1,1 @@
+rsync -rthvv --prune-empty-dirs --progress --include="*/*/eeg/*qcr_m*" --include="*/" --exclude="*" $2/derivatives/lossless/sub-* $1@gra-dtn1.computecanada.ca:/home/$1/projects/def-bucanl/eegip/$2/derivatives/lossless/

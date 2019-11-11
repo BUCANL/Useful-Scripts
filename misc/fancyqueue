@@ -1,0 +1,1 @@
+alias fancyqueue='squeue -u $USER -o "%2t %9i %28j %19V %.7M %.9L %.7m %7c %5D %R"'
